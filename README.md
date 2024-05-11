@@ -1,6 +1,6 @@
 # react-native-ntag-424
 
-Utilities that simplify integration with the ntag-424 class of NFC chips from NXP.
+Utilities that simplify integration with the NTAG-424 class of NFC chips from NXP.
 
 Implemented according to the [NTAG-424 datasheet](https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf)
 
