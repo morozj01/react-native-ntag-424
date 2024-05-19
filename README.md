@@ -66,7 +66,7 @@ async function scan() {
 
 ### API
 
-View the complete documentation here.
+View the complete documentation [here](https://morozj01.github.io/react-native-ntag-424/classes/default.html).
 
 ## Contributing
 
