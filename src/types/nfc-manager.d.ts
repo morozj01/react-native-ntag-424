@@ -92,10 +92,7 @@ declare module 'react-native-nfc-manager' {
   }
 
   interface NdefHandler {
-    writeNdefMessage: (
-      bytes: number[],
-      options?: { reconnectAfterWrite: boolean }
-    ) => Promise<void>;
+    writeNdefMessage: (bytes: number[], options?: { reconnectAfterWrite: boolean }) => Promise<void>;
     getNdefMessage: () => Promise<TagEvent | null>;
     makeReadOnly: () => Promise<void>;
     getNdefStatus: () => Promise<{
@@ -148,16 +145,8 @@ declare module 'react-native-nfc-manager' {
       icReference: number;
     }>;
     readSingleBlock: (params: { flags: number; blockNumber: number }) => Promise<number[]>;
-    readMultipleBlocks: (params: {
-      flags: number;
-      blockNumber: number;
-      blockCount: number;
-    }) => Promise<number[][]>;
-    writeSingleBlock: (params: {
-      flags: number;
-      blockNumber: number;
-      dataBlock: number[];
-    }) => Promise<void>;
+    readMultipleBlocks: (params: { flags: number; blockNumber: number; blockCount: number }) => Promise<number[][]>;
+    writeSingleBlock: (params: { flags: number; blockNumber: number; dataBlock: number[] }) => Promise<void>;
     lockBlock: (params: { flags: number; blockNumber: number }) => Promise<void>;
     writeAFI: (params: { flags: number; afi: number }) => Promise<void>;
     lockAFI: (params: { flags: number }) => Promise<void>;
@@ -171,17 +160,9 @@ declare module 'react-native-nfc-manager' {
       customCommandCode: number;
       customRequestParameters: number[];
     }) => Promise<number[]>;
-    sendRequest: (params: {
-      flags: number;
-      commandCode: number;
-      data: number[];
-    }) => Promise<[number, number[]]>;
+    sendRequest: (params: { flags: number; commandCode: number; data: number[] }) => Promise<[number, number[]]>;
     extendedReadSingleBlock: (params: { flags: number; blockNumber: number }) => Promise<number[]>;
-    extendedWriteSingleBlock: (params: {
-      flags: number;
-      blockNumber: number;
-      dataBlock: number[];
-    }) => Promise<void>;
+    extendedWriteSingleBlock: (params: { flags: number; blockNumber: number; dataBlock: number[] }) => Promise<void>;
     extendedLockBlock: (params: { flags: number; blockNumber: number }) => Promise<void>;
   }
 
@@ -197,10 +178,7 @@ declare module 'react-native-nfc-manager' {
     registerTagEvent(options?: RegisterTagEventOpts): Promise<void>;
     unregisterTagEvent(): Promise<void>;
     setEventListener(name: NfcEvents, callback: OnNfcEvents | null): void;
-    requestTechnology(
-      tech: NfcTech | NfcTech[],
-      options?: RegisterTagEventOpts
-    ): Promise<NfcTech | null>;
+    requestTechnology(tech: NfcTech | NfcTech[], options?: RegisterTagEventOpts): Promise<NfcTech | null>;
     cancelTechnologyRequest: (options?: CancelTechReqOpts) => Promise<void>;
     getTag: () => Promise<TagEvent | null>;
     getBackgroundTag: () => Promise<TagEvent | null>;

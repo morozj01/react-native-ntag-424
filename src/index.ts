@@ -2,16 +2,22 @@ import { Buffer } from 'buffer';
 import { type NfcManager as NfcManagerType } from './types/nfc-manager';
 import { NfcTech } from 'react-native-nfc-manager';
 import type { CommandOptions, SelectFileOption, ReadWriteFileOption } from './types/types';
-import { aesCbcEncrypt, aesEcbEncrypt, aesCbcDecrypt, crc32, getBits } from './utils/crypto';
-import crypto from 'react-native-quick-crypto';
-import { sessionKeyEncryption, sessionKeyMac } from './utils/sessionKeys';
-import { aesCmac } from 'node-aes-cmac';
-import { NtagError } from './utils/error';
+import { encrypt, decrypt, crc32 } from './services/crypto';
+import { getBits } from './services/utils';
+import crypto from 'crypto';
+import {
+  decryptPayload,
+  encryptPayload,
+  generateEncKey,
+  generateMac,
+  generateMacKey,
+  verifyMac,
+} from './services/ntag424';
+import { NtagError } from './services/errors';
 
 class Ntag424 {
   private readonly nfcManager: NfcManagerType;
   private isAuthenticated: boolean;
-  private authenticatedKeySlot?: number;
   private sessionKeyEncryption?: Buffer;
   private sessionKeyMac?: Buffer;
   private transactionId?: Buffer;
@@ -22,14 +28,26 @@ class Ntag424 {
     this.isAuthenticated = false;
   }
 
-  public async initialize() {
+  /**
+   * Begin an NFC scan and wait wait for an NFC card to be detected.
+   */
+  public async initiate() {
     await this.nfcManager.requestTechnology(NfcTech.IsoDep);
   }
 
+  /**
+   * End the currently active NFC scan.
+   */
   public async terminate() {
     await this.nfcManager.cancelTechnologyRequest();
   }
 
+  /**
+   * Selects either the PICC level, the application or a file within the application.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=77&zoom=100,200,220}
+   * @param file file to select
+   * @returns response code
+   */
   public async selectFile(file: SelectFileOption) {
     const adpuHeader = [0x00, 0xa4, 0x00, 0x0c];
     const commandHeader = [] as number[];
@@ -42,8 +60,7 @@ class Ntag424 {
     else if (file === 'proprietary') commandData.push(0xe1, 0x05);
     else throw new Error('Invalid file selected');
 
-    if (file === 'cc' || file === 'ndef' || file === 'proprietary')
-      await this.selectFile('application');
+    if (file === 'cc' || file === 'ndef' || file === 'proprietary') await this.selectFile('application');
 
     const response = await this.sendCommand({
       adpuHeader,
@@ -56,6 +73,11 @@ class Ntag424 {
     return response;
   }
 
+  /**
+   * Get the 7-byte UID from the chip. An authentication with any key slot needs to be performed prior to this function.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=61&zoom=100,200,154}
+   * @returns response data + response code
+   */
   public async getCardUid() {
     const adpuHeader = [0x90, 0x51, 0x00, 0x00];
 
@@ -67,11 +89,17 @@ class Ntag424 {
       includeLe: true,
     });
 
-    const decrypted = this.decryptPayload(response);
+    const decrypted = decryptPayload(response, this.transactionId!, this.commandCounter!, this.sessionKeyEncryption!);
 
     return decrypted;
   }
 
+  /**
+   * Get configuration properties of a specific file.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=69&zoom=100,200,606}
+   * @param file file to retrieve
+   * @returns response data + response code
+   */
   public async getFileSettings(file: ReadWriteFileOption) {
     const adpuHeader = [0x90, 0xf5, 0x00, 0x00];
 
@@ -94,6 +122,13 @@ class Ntag424 {
     return response;
   }
 
+  /**
+   * Change the access parameters of an existing file.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=65&zoom=100,200,220}
+   * @param file file to update
+   * @param fileSettings see data sheet for input structure
+   * @returns response code
+   */
   public async changeFileSettings(file: ReadWriteFileOption, fileSettings: Buffer) {
     const adpuHeader = [0x90, 0x5f, 0x00, 0x00];
 
@@ -117,7 +152,15 @@ class Ntag424 {
     return response;
   }
 
-  public async readData(file: ReadWriteFileOption, offset = 0, length = 0) {
+  /**
+   * Read data from one of the application data files.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=73&zoom=100,200,220}
+   * @param file file to read from
+   * @param length number of bytes to read
+   * @param offset byte at which to start reading
+   * @returns response data + response code
+   */
+  public async readData(file: ReadWriteFileOption, length = 0, offset = 0) {
     const adpuHeader = [0x90, 0xad, 0x00, 0x00];
 
     if (offset > 255 || length > 255) throw new Error('Length and offset must be below 256');
@@ -146,6 +189,14 @@ class Ntag424 {
     return response;
   }
 
+  /**
+   * Write data to one of the application data files.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=75&zoom=100,200,154}
+   * @param file file to write to
+   * @param data data to write
+   * @param offset byte at which to begin writing
+   * @returns response code
+   */
   public async writeData(file: ReadWriteFileOption, data: Buffer, offset = 0) {
     if (data.length > 248) throw new Error('Data buffer can contain 248 bytes at most');
 
@@ -186,6 +237,12 @@ class Ntag424 {
     return response;
   }
 
+  /**
+   * Change key slot #0. Must be authenticated with key slot #0.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=62&zoom=100,200,220}
+   * @param newKey updated (16 byte) key data
+   * @returns response code
+   */
   public async changeMasterKey(newKey: Buffer) {
     const adpuHeader = [0x90, 0xc4, 0x00, 0x00];
     const commandHeader = [0x00];
@@ -204,6 +261,14 @@ class Ntag424 {
     return response;
   }
 
+  /**
+   * Change key slot #1-4. Must be authenticated with key slot #0.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=62&zoom=100,200,220}
+   * @param keySlot key slot to change where 1<=keySlot<=4
+   * @param oldKey current (16 byte) key data
+   * @param newKey new (16 byte) key data
+   * @returns response code
+   */
   public async changeApplicationKey(keySlot: number, oldKey: Buffer, newKey: Buffer) {
     const adpuHeader = [0x90, 0xc4, 0x00, 0x00];
     const commandHeader = [keySlot];
@@ -226,6 +291,12 @@ class Ntag424 {
     return response;
   }
 
+  /**
+   * Retrieve the current key version of any key.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=64&zoom=100,200,154}
+   * @param keySlot key slot # to retrieve
+   * @returns response data + response code
+   */
   public async getKeyVersion(keySlot: number) {
     const adpuHeader = [0x90, 0x64, 0x00, 0x00];
     const commandHeader = [keySlot];
@@ -242,89 +313,71 @@ class Ntag424 {
     return response[0] as number;
   }
 
+  /**
+   * Initiate an authentication based on standard AES.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=46&zoom=100,200,292}
+   * @param keySlot key slot # to authenticate into
+   * @param key 16 byte key data
+   * @returns response code
+   */
   public async authenticateEv2First(keySlot: number, key: Buffer) {
     const partOne = await this.authenticateEv2FirstPartOne(keySlot);
 
-    const randB = aesCbcDecrypt(partOne.subarray(0, 16), Buffer.alloc(16), key);
+    const randB = decrypt(partOne.subarray(0, 16), Buffer.alloc(16), key, 'aes-128-cbc');
     const randA = Buffer.from(crypto.randomBytes(16));
 
     const randBRotatedLeft = Buffer.concat([randB.subarray(1), randB.subarray(0, 1)]);
 
-    const { encrypted } = aesCbcEncrypt(
+    const encrypted = encrypt(
       Buffer.concat([randA, Buffer.from(randBRotatedLeft)]),
       Buffer.alloc(16),
-      key
+      key,
+      'aes-128-cbc'
     );
 
     const partTwoEncrypted = await this.aesAuthenticateEv2FirstPartTwo(encrypted);
 
-    const partTwo = aesCbcDecrypt(partTwoEncrypted.subarray(0, 32), Buffer.alloc(16), key);
+    const partTwo = decrypt(partTwoEncrypted.subarray(0, 32), Buffer.alloc(16), key, 'aes-128-cbc');
 
     this.isAuthenticated = true;
-    this.authenticatedKeySlot = keySlot;
     this.transactionId = partTwo.subarray(0, 4);
     this.commandCounter = Buffer.alloc(2);
-    this.sessionKeyEncryption = sessionKeyEncryption(randA, randB, key);
-    this.sessionKeyMac = sessionKeyMac(randA, randB, key);
+    this.sessionKeyEncryption = generateEncKey(randA, randB, key);
+    this.sessionKeyMac = generateMacKey(randA, randB, key);
 
     return [0x91, 0x00];
   }
 
+  /**
+   * Continues a transaction started by a previous authenticateEv2First command.
+   * {@link https://www.nxp.com/docs/en/data-sheet/NT4H2421Gx.pdf#page=49&zoom=100,200,154}
+   * @param keySlot key slot # to authenticate into
+   * @param key 16 byte key data
+   * @returns response code
+   */
   public async authenticateEv2NonFirst(keySlot: number, key: Buffer) {
-    if (!this.authenticatedKeySlot)
-      throw new Error(`Must authenticateFirst before using authenticateNonFirst`);
+    if (!this.isAuthenticated) throw new Error(`Must call authenticateFirst before using authenticateNonFirst`);
 
     const partOne = await this.authenticateEv2NonFirstPartOne(keySlot);
 
-    const randB = aesCbcDecrypt(partOne.subarray(0, 16), Buffer.alloc(16), key);
+    const randB = decrypt(partOne.subarray(0, 16), Buffer.alloc(16), key, 'aes-128-cbc');
     const randA = Buffer.from(crypto.randomBytes(16));
 
     const randBRotatedLeft = Buffer.concat([randB.subarray(1), randB.subarray(0, 1)]);
 
-    const { encrypted } = aesCbcEncrypt(
+    const encrypted = encrypt(
       Buffer.concat([randA, Buffer.from(randBRotatedLeft)]),
       Buffer.alloc(16),
-      key
+      key,
+      'aes-128-cbc'
     );
 
     await this.aesAuthenticateEv2NonFirstPartTwo(encrypted);
 
-    this.sessionKeyEncryption = sessionKeyEncryption(randA, randB, key);
-    this.sessionKeyMac = sessionKeyMac(randA, randB, key);
+    this.sessionKeyEncryption = generateEncKey(randA, randB, key);
+    this.sessionKeyMac = generateMacKey(randA, randB, key);
 
     return [0x91, 0x00];
-  }
-
-  private async authenticateEv2NonFirstPartOne(keySlot: number) {
-    const adpuHeader = [0x90, 0x77, 0x00, 0x00];
-    const commandHeader = [keySlot];
-    const commandData = [] as number[];
-
-    const response = await this.sendCommand({
-      adpuHeader,
-      commandHeader,
-      commandData,
-      commandMode: 'plain',
-      includeLe: true,
-    });
-
-    return Buffer.from(response);
-  }
-
-  private async aesAuthenticateEv2NonFirstPartTwo(data: Buffer) {
-    const adpuHeader = [0x90, 0xaf, 0x00, 0x00];
-    const commandHeader = [] as number[];
-    const commandData = [...data];
-
-    const response = await this.sendCommand({
-      adpuHeader,
-      commandHeader,
-      commandData,
-      commandMode: 'plain',
-      includeLe: true,
-    });
-
-    return Buffer.from(response);
   }
 
   private async authenticateEv2FirstPartOne(keySlot: number) {
@@ -359,94 +412,36 @@ class Ntag424 {
     return Buffer.from(response);
   }
 
-  private generateMac(commandCode: number[], commandHeader: number[], commandData: number[]) {
-    const macData = Buffer.concat([
-      Buffer.from(commandCode),
-      this.commandCounter!,
-      this.transactionId!,
-      Buffer.from(commandHeader),
-      Buffer.from(commandData),
-    ]);
+  private async authenticateEv2NonFirstPartOne(keySlot: number) {
+    const adpuHeader = [0x90, 0x77, 0x00, 0x00];
+    const commandHeader = [keySlot];
+    const commandData = [] as number[];
 
-    const mac = aesCmac(Buffer.from(this.sessionKeyMac!), macData, { returnAsBuffer: true });
+    const response = await this.sendCommand({
+      adpuHeader,
+      commandHeader,
+      commandData,
+      commandMode: 'plain',
+      includeLe: true,
+    });
 
-    return mac.filter((_, i) => i % 2 === 1);
+    return Buffer.from(response);
   }
 
-  private verifyMac(response: number[]) {
-    const data = response.slice(0, response.length - 10);
-    const responseCode = response.slice(-2);
-    const mac = response.slice(response.length - 10, response.length - 2);
+  private async aesAuthenticateEv2NonFirstPartTwo(data: Buffer) {
+    const adpuHeader = [0x90, 0xaf, 0x00, 0x00];
+    const commandHeader = [] as number[];
+    const commandData = [...data];
 
-    const macData = Buffer.concat([
-      Buffer.from([responseCode[1]!]),
-      this.commandCounter!,
-      this.transactionId!,
-      Buffer.from(data),
-    ]);
+    const response = await this.sendCommand({
+      adpuHeader,
+      commandHeader,
+      commandData,
+      commandMode: 'plain',
+      includeLe: true,
+    });
 
-    const macCheck = aesCmac(Buffer.from(this.sessionKeyMac!), macData, {
-      returnAsBuffer: true,
-    }).filter((_, i) => i % 2 === 1);
-
-    if (mac.toString() !== macCheck.toString()) throw new Error('Response mac verification failed');
-
-    return [...data, ...mac, ...responseCode];
-  }
-
-  private encryptPayload(commandData: number[]) {
-    const { encrypted: iv } = aesEcbEncrypt(
-      Buffer.concat([
-        Buffer.from([0xa5, 0x5a]),
-        this.transactionId!,
-        this.commandCounter!,
-        Buffer.alloc(8),
-      ]),
-      Buffer.from([]),
-      this.sessionKeyEncryption!
-    );
-
-    const padding = 16 - (commandData.length % 16);
-
-    let commandDataWithPadding;
-    if (padding === 1) {
-      commandDataWithPadding = Buffer.concat([Buffer.from(commandData), Buffer.from([0x80])]);
-    } else {
-      commandDataWithPadding = Buffer.concat([
-        Buffer.from(commandData),
-        Buffer.from([0x80]),
-        Buffer.alloc(padding - 1),
-      ]);
-    }
-
-    const { encrypted: encryptedData } = aesCbcEncrypt(
-      commandDataWithPadding,
-      iv,
-      this.sessionKeyEncryption!
-    );
-
-    return [...encryptedData];
-  }
-
-  private decryptPayload(response: number[]) {
-    const data = response.slice(0, response.length - 10);
-    const responseCode = response.slice(-2);
-    const mac = response.slice(response.length - 10, response.length - 2);
-
-    const { encrypted: decryptionIv } = aesEcbEncrypt(
-      Buffer.concat([
-        Buffer.from([0x5a, 0xa5]),
-        this.transactionId!,
-        this.commandCounter!,
-        Buffer.alloc(8),
-      ]),
-      Buffer.from([]),
-      this.sessionKeyEncryption!
-    );
-
-    const decrypted = aesCbcDecrypt(Buffer.from(data), decryptionIv, this.sessionKeyEncryption!);
-
-    return [...decrypted, ...mac, ...responseCode];
+    return Buffer.from(response);
   }
 
   private incrementCommandCounter() {
@@ -455,94 +450,113 @@ class Ntag424 {
     else this.commandCounter[1] += 1;
   }
 
-  private async sendCommand({
-    adpuHeader,
-    commandHeader,
-    commandData,
-    commandMode,
-    includeLe,
-  }: CommandOptions) {
-    if (commandMode === 'plain') {
-      const length = commandHeader.length + commandData.length;
-      const payload = [
-        ...adpuHeader,
-        ...(length > 0 ? [length] : []),
-        ...commandHeader,
-        ...commandData,
-        ...(includeLe ? [0x00] : []),
-      ];
+  private async sendCommand({ adpuHeader, commandHeader, commandData, commandMode, includeLe }: CommandOptions) {
+    switch (commandMode) {
+      case 'plain': {
+        const length = commandHeader.length + commandData.length;
+        const payload = [
+          ...adpuHeader,
+          ...(length > 0 ? [length] : []),
+          ...commandHeader,
+          ...commandData,
+          ...(includeLe ? [0x00] : []),
+        ];
 
-      const response = await this.nfcManager.isoDepHandler.transceive(payload);
+        const response = await this.nfcManager.isoDepHandler.transceive(payload);
 
-      if (response[response.length - 1] !== 0x00 && response[response.length - 1] !== 0xaf)
-        throw new NtagError(adpuHeader.slice(0, 2), response.slice(-2));
+        if (response[response.length - 1] !== 0x00 && response[response.length - 1] !== 0xaf)
+          throw new NtagError(adpuHeader.slice(0, 2), response.slice(-2));
 
-      this.incrementCommandCounter();
+        this.incrementCommandCounter();
 
-      return response;
-    }
-
-    if (commandMode === 'mac') {
-      if (!this.isAuthenticated) {
-        throw new Error('Please authenticate first to use this command');
+        return response;
       }
 
-      const mac = this.generateMac(adpuHeader.slice(1, 2), commandHeader, commandData);
+      case 'mac': {
+        if (!this.isAuthenticated) {
+          throw new Error('Please authenticate first to use this command');
+        }
 
-      const length = commandHeader.length + commandData.length + mac.length;
+        const mac = generateMac(
+          adpuHeader.slice(1, 2),
+          commandHeader,
+          commandData,
+          this.commandCounter!,
+          this.transactionId!,
+          this.sessionKeyMac!
+        );
 
-      const payload = [
-        ...adpuHeader,
-        ...(length > 0 ? [length] : []),
-        ...commandHeader,
-        ...commandData,
-        ...mac,
-        ...(includeLe ? [0x00] : []),
-      ];
+        const length = commandHeader.length + commandData.length + mac.length;
 
-      const response = await this.nfcManager.isoDepHandler.transceive(payload);
+        const payload = [
+          ...adpuHeader,
+          ...(length > 0 ? [length] : []),
+          ...commandHeader,
+          ...commandData,
+          ...mac,
+          ...(includeLe ? [0x00] : []),
+        ];
 
-      if (response[response.length - 1] !== 0x00)
-        throw new NtagError(adpuHeader.slice(0, 2), response.slice(-2));
+        const response = await this.nfcManager.isoDepHandler.transceive(payload);
 
-      this.incrementCommandCounter();
+        if (response[response.length - 1] !== 0x00) throw new NtagError(adpuHeader.slice(0, 2), response.slice(-2));
 
-      return this.verifyMac(response);
-    }
+        this.incrementCommandCounter();
 
-    if (commandMode === 'full') {
-      if (!this.isAuthenticated) {
-        throw new Error('Please authenticate first to use this command');
+        return verifyMac(response, this.commandCounter!, this.transactionId!, this.sessionKeyMac!);
       }
 
-      const encryptedData = this.encryptPayload(commandData);
+      case 'full': {
+        if (!this.isAuthenticated) {
+          throw new Error('Please authenticate first to use this command');
+        }
 
-      const mac = this.generateMac(adpuHeader.slice(1, 2), commandHeader, encryptedData);
+        const encryptedData = encryptPayload(
+          commandData,
+          this.transactionId!,
+          this.commandCounter!,
+          this.sessionKeyEncryption!
+        );
 
-      const length = encryptedData.length + commandHeader.length + mac.length;
+        const mac = generateMac(
+          adpuHeader.slice(1, 2),
+          commandHeader,
+          encryptedData,
+          this.commandCounter!,
+          this.transactionId!,
+          this.sessionKeyMac!
+        );
 
-      const payload = [
-        ...adpuHeader,
-        ...(length > 0 ? [length] : []),
-        ...commandHeader,
-        ...encryptedData,
-        ...mac,
-        ...(includeLe ? [0x00] : []),
-      ];
+        const length = encryptedData.length + commandHeader.length + mac.length;
 
-      const response = await this.nfcManager.isoDepHandler.transceive(payload);
+        const payload = [
+          ...adpuHeader,
+          ...(length > 0 ? [length] : []),
+          ...commandHeader,
+          ...encryptedData,
+          ...mac,
+          ...(includeLe ? [0x00] : []),
+        ];
 
-      if (response[response.length - 1] !== 0x00)
-        throw new NtagError(adpuHeader.slice(0, 2), response.slice(-2));
+        const response = await this.nfcManager.isoDepHandler.transceive(payload);
 
-      this.incrementCommandCounter();
+        if (response[response.length - 1] !== 0x00) throw new NtagError(adpuHeader.slice(0, 2), response.slice(-2));
 
-      const decryptedResponse = this.decryptPayload(response);
+        this.incrementCommandCounter();
 
-      return this.verifyMac(decryptedResponse);
+        const decryptedResponse = decryptPayload(
+          response,
+          this.transactionId!,
+          this.commandCounter!,
+          this.sessionKeyEncryption!
+        );
+
+        return verifyMac(decryptedResponse, this.commandCounter!, this.transactionId!, this.sessionKeyMac!);
+      }
+
+      default:
+        throw new Error('Invalid command mode');
     }
-
-    throw new Error('Invalid command mode');
   }
 }
 

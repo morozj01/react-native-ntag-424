@@ -1,16 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  Modal,
-  StyleSheet,
-  Dimensions,
-  TouchableOpacity,
-  Animated,
-} from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, Modal, StyleSheet, Dimensions, TouchableOpacity, Animated } from 'react-native';
 
 function AndroidPrompt({ visible, hideModal }: { visible: boolean; hideModal: () => void }) {
-  const [hintText, setHintText] = useState('');
   const animValue = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -26,7 +17,6 @@ function AndroidPrompt({ visible, hideModal }: { visible: boolean; hideModal: ()
         toValue: 0,
         useNativeDriver: true,
       }).start();
-      setHintText('');
     }
   }, [visible, animValue]);
 
@@ -50,7 +40,7 @@ function AndroidPrompt({ visible, hideModal }: { visible: boolean; hideModal: ()
       <View style={styles.content}>
         <Animated.View style={[styles.backdrop, StyleSheet.absoluteFill, backdropAnimStyle]} />
         <Animated.View style={[styles.prompt, promptAnimStyle]}>
-          <Text style={styles.hint}>{hintText || 'hello'}</Text>
+          <Text style={styles.hint}>{'SCAN TAG'}</Text>
 
           <TouchableOpacity
             style={styles.btn}
@@ -82,7 +72,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   hint: {
-    fontSize: 24,
+    fontSize: 22,
     marginBottom: 20,
   },
   btn: {
