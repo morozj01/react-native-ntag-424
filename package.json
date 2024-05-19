@@ -1,6 +1,6 @@
 {
   "name": "react-native-ntag-424",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A set of utilities to simplify integration with the ntag-424 class of NFC chips from NXP.",
   "main": "lib/commonjs/index",
   "module": "lib/module/index",
