@@ -25,13 +25,13 @@ yarn add react-native-ntag-424
 
 This library depends on Node's built-in `crypto` module.
 
-`react-native-quick-crypto` is a highly performant polyfill which is included as a dependency of this package, but to properly configure your bundler you must follow the instructions [here.](https://github.com/margelo/react-native-quick-crypto?tab=readme-ov-file#replace-crypto-browserify)
+A highly performant polyfill called `react-native-quick-crypto` is included as a dependency of this package, but to properly configure your bundler you must follow the instructions [here.](https://github.com/margelo/react-native-quick-crypto?tab=readme-ov-file#replace-crypto-browserify)
 
 ### Configuring peer dependencies
 
 This library depends on the [react-native-nfc-manager](https://github.com/revtel/react-native-nfc-manager) package for cross platform NFC functionality.
 
-Please ensure you have installed `react-native-nfc-manager` and followed [these instructions](https://github.com/revtel/react-native-nfc-manager?tab=readme-ov-file#installation) and properly configured your project with react-native-nfc-manager.
+Please ensure you have installed `react-native-nfc-manager`, followed [these instructions](https://github.com/revtel/react-native-nfc-manager?tab=readme-ov-file#installation) and properly configured your project with react-native-nfc-manager.
 
 ## Usage
 
