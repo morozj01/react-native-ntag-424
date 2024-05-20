@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/morozj01/react-native-ntag-424/compare/v1.0.2...v1.0.3) (2024-05-20)
+
+
+### Bug Fixes
+
+* update readme example ([3b1ffbc](https://github.com/morozj01/react-native-ntag-424/commit/3b1ffbc0f284686b883156b08350a1c0c88acf37))
+
 ## [1.0.2](https://github.com/morozj01/react-native-ntag-424/compare/v1.0.1...v1.0.2) (2024-05-19)
 
 
