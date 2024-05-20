@@ -49,10 +49,10 @@ async function scan() {
   await ntag424.initiate();
 
   // select application/DF level
-  await ntag424Ref.selectFile('application');
+  await ntag424.selectFile('application');
 
   // authenticate into key slot #0 using the default key (16 zero bytes)
-  await ntag424Ref.authenticateEv2First(0, Buffer.alloc(16));
+  await ntag424.authenticateEv2First(0, Buffer.alloc(16));
 
   // retrieve card UID
   const uid = await ntag424.getCardUid();
