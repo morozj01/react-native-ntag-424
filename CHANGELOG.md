@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/morozj01/react-native-ntag-424/compare/v1.0.1...v1.0.2) (2024-05-19)
+
+
+### Bug Fixes
+
+* npm publish github action ([#7](https://github.com/morozj01/react-native-ntag-424/issues/7)) ([f6c4d76](https://github.com/morozj01/react-native-ntag-424/commit/f6c4d765b2d6ac121cebcd44b16de462949a5117))
+
 ## [1.0.1](https://github.com/morozj01/react-native-ntag-424/compare/v1.0.0...v1.0.1) (2024-05-19)
 
 
